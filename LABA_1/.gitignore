@@ -1,0 +1,5 @@
+/build
+/.cache
+/.idea
+/Data
+/plot_gen/.venv
