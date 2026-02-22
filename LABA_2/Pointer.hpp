@@ -1,8 +1,8 @@
-//
-// Created by mimixtop on 21.02.2026.
-//
+#pragma once
+#include <array>
 
-#ifndef LABA_2_POINTER_HPP
-#define LABA_2_POINTER_HPP
+struct Point {
+    std::array<double, 9> coords;
 
-#endif //LABA_2_POINTER_HPP
+    int cluster_id = -1; 
+};

@@ -13,36 +13,36 @@ def load_data_from_file(path: Path) -> torch.Tensor:
             parts = line.strip().split()
             if len(parts) >= 9:
                 data.append([float(p) for p in parts[:9]])
-    
+
     return torch.tensor(data, dtype=torch.float32)
 
 def apply_pca(full_data: torch.Tensor) -> torch.Tensor:
-    
+
     mean = torch.mean(full_data, dim=0)
     centered_data = full_data - mean
-    
+
     U, S, V = torch.pca_lowrank(centered_data, q=2)
-    
+
     projected_data = torch.matmul(centered_data, V[:, :2])
-    
+
     return projected_data
 
 def gen_plot(projected_groups: list[torch.Tensor], file_names: list[str]):
     plt.figure(figsize=(12, 8))
-    
+
     for i, data_2d in enumerate(projected_groups):
         x = data_2d[:, 0].numpy()
         y = data_2d[:, 1].numpy()
-        
+
         plt.scatter(x, y, label=file_names[i], s=5, alpha=0.6)
 
     plt.title("PCA Projection (9D -> 2D) of K-Means Data")
     plt.xlabel("Principal Component 1")
     plt.ylabel("Principal Component 2")
-    
+
     plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.grid(True, linestyle='--', alpha=0.5)
-    
+
     plt.tight_layout()
     plt.savefig("pca_scatter_plot.png", dpi=300) # dpi=300 для высокого качества
     print("График сохранен в pca_scatter_plot.png")

@@ -2,18 +2,11 @@ from matplotlib import pyplot as plt
 import torch
 
 def apply_pca(full_data: torch.Tensor) -> torch.Tensor:
-    """Применяет PCA для понижения размерности с 9D до 2D."""
-    print(f"Применяю PCA к данным размерностью {full_data.shape}...")
-    
-    # 1. Центрирование данных (вычитаем среднее по каждой колонке)
     mean = torch.mean(full_data, dim=0)
     centered_data = full_data - mean
     
-    # 2. Быстрый алгоритм PCA (lowrank SVD)
-    # q=2 — до какого количества измерений сжимаем
     U, S, V = torch.pca_lowrank(centered_data, q=2)
     
-    # 3. Проекция данных на 2 главные компоненты
     projected_data = torch.matmul(centered_data, V[:, :2])
     
     return projected_data

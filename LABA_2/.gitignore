@@ -1,0 +1,7 @@
+/build
+/.cache
+/.idea
+/Data
+/plot_gen/.venv
+/cmake-build-debug
+/cmake-build-release

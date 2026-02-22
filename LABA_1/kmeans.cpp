@@ -2,15 +2,18 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <execution>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <print>
 #include <random>
 #include <ranges>
+#include <experimental/simd>
 #include <vector>
 
-constexpr int K = 5;   // Количество кластеров
+constexpr int K = 10;
 
 Point avg_point(const std::vector<Point>& points) {
     Point center;
@@ -85,7 +88,7 @@ std::vector<Point> kmeans(std::vector<Point>& points) {
         centers[i].cluster_id = i;
     }
 
-    for (int iter = 0; iter < 100; ++iter) {
+    for (int iter = 0; iter < 100000; ++iter) {
         std::for_each(std::execution::par_unseq, points.begin(), points.end(), [&](Point& p) {
             double min_dist = std::numeric_limits<double>::max();
             int best_id = 0;
@@ -114,15 +117,29 @@ std::vector<Point> kmeans(std::vector<Point>& points) {
             if (counts[i] > 0) {
                 for (size_t j = 0; j < 9; ++j) {
                     double new_val = new_sums[i][j] / counts[i];
-                    if (std::abs(centers[i].coords[j] - new_val) > 1e-4)
+                    if (std::abs(centers[i].coords[j] - new_val) == 0)
                         changed = true;
                     centers[i].coords[j] = new_val;
                 }
             }
         }
 
-        if (!changed)
+        /* if (iter % 10 == 0) {
+            std::println("Итерация: {}", iter);
+            std::for_each(centers.begin(), centers.end(), [&](Point& p) {
+                std::println("Центроид {} координаты: {}", p.cluster_id, p.coords);
+            });
+        } */
+
+        if (!changed) {
+            /* if (iter % 10 != 0) {
+                std::println("Итерация: {}", iter);
+                std::for_each(centers.begin(), centers.end(), [&](Point& p) {
+                    std::println("Центроид {} координаты: {}", p.cluster_id, p.coords);
+                });
+            } */
             break;
+        }
     }
     return { centers.begin(), centers.end() };
 }
@@ -130,7 +147,14 @@ std::vector<Point> kmeans(std::vector<Point>& points) {
 int main() {
     try {
         std::vector<Point> points = load_pointers("../Data");
+        std::println("Классификация начала");
+        auto start = std::chrono::high_resolution_clock::now();
         std::vector<Point> centers = kmeans(points);
+        auto end = std::chrono::high_resolution_clock::now();
+
+        std::cout << std::format(
+            "Классификация завершена за {} милисекунд\n",
+            std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count());
         save_all_results(points, centers);
     } catch (const std::exception& e) {
         std::cerr << "Ошибка: " << e.what() << std::endl;
