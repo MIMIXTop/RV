@@ -9,6 +9,7 @@
 #include <random>
 #include <vector>
 #include <sstream>
+#include <format> // Для std::format
 
 #include <cuda_runtime.h>
 
@@ -24,6 +25,7 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort =
     }
 }
 
+// Базовое ядро назначения кластеров
 __global__ void assign_clusters(
     const double *points,
     const double *centers,
@@ -48,12 +50,14 @@ __global__ void assign_clusters(
         }
     }
 
+    // Если кластер изменился, ставим флаг
     if (cluster_ids[idx] != best_id) {
         cluster_ids[idx] = best_id;
-        *d_changed = 1;
+        atomicExch(d_changed, 1);
     }
 }
 
+// Базовое ядро суммирования (Global Atomics)
 __global__ void compute_sums(
     const double *points,
     const int *cluster_ids,
@@ -72,6 +76,7 @@ __global__ void compute_sums(
     }
 }
 
+// Базовое ядро обновления центров
 __global__ void update_centers(
     double *centers,
     const double *new_sums,
@@ -152,6 +157,7 @@ std::vector<Point> kmeans(std::vector<Point> &points) {
     double *d_points, *d_centers, *d_sums;
     int *d_cluster_ids, *d_counts, *d_changed;
 
+    // Стандартное выделение памяти (не Pinned/Host)
     cudaCheck(cudaMalloc(&d_points, num_points * DIMS * sizeof(double)));
     cudaCheck(cudaMalloc(&d_centers, K * DIMS * sizeof(double)));
     cudaCheck(cudaMalloc(&d_cluster_ids, num_points * sizeof(int)));
@@ -163,34 +169,61 @@ std::vector<Point> kmeans(std::vector<Point> &points) {
     cudaCheck(cudaMemcpy(d_centers, h_centers.data(), K * DIMS * sizeof(double), cudaMemcpyHostToDevice));
     cudaCheck(cudaMemcpy(d_cluster_ids, h_cluster_ids.data(), num_points * sizeof(int), cudaMemcpyHostToDevice));
 
+    // Синхронизация перед началом чистого замера
+    cudaDeviceSynchronize();
+
+    // === НАЧАЛО ЗАМЕРА ВЫЧИСЛЕНИЙ ===
+    std::cout << "Запуск чистого вычислительного цикла (Strict Convergence)..." << std::endl;
+    auto start_compute = std::chrono::high_resolution_clock::now();
+
     int blockSize = 256;
     int numBlocks = (num_points + blockSize - 1) / blockSize;
 
     int iter = 0;
     int h_changed = 1;
 
+    // Цикл продолжается, пока h_changed != 0
     while (h_changed) {
         h_changed = 0;
         cudaCheck(cudaMemcpy(d_changed, &h_changed, sizeof(int), cudaMemcpyHostToDevice));
 
+        // 1. Назначение кластеров (здесь выставляется флаг d_changed)
         assign_clusters<<<numBlocks, blockSize>>>(d_points, d_centers, d_cluster_ids, d_changed, num_points);
         cudaCheck(cudaGetLastError());
 
+        // 2. Чтение флага
         cudaCheck(cudaMemcpy(&h_changed, d_changed, sizeof(int), cudaMemcpyDeviceToHost));
-        if (!h_changed) break;
 
+        // 3. Обнуление и пересчет сумм
         cudaCheck(cudaMemset(d_sums, 0, K * DIMS * sizeof(double)));
         cudaCheck(cudaMemset(d_counts, 0, K * sizeof(int)));
 
         compute_sums<<<numBlocks, blockSize>>>(d_points, d_cluster_ids, d_sums, d_counts, num_points);
         cudaCheck(cudaGetLastError());
 
+        // 4. Обновление центров
         update_centers<<<1, K>>>(d_centers, d_sums, d_counts);
         cudaCheck(cudaGetLastError());
 
-        iter++;
-    }
+        // Мы не копируем центры на хост для проверки max_shift,
+        // так как критерий остановки теперь строго по h_changed.
 
+        iter++;
+        if (iter % 10 == 0) std::cout << "Итерация: " << iter << "\r" << std::flush;
+    }
+    std::cout << std::endl;
+
+    // Синхронизация перед остановкой таймера
+    cudaDeviceSynchronize();
+    auto end_compute = std::chrono::high_resolution_clock::now();
+
+    std::cout << std::format(
+        "⏱️ Чистое время вычислений (Lab 2 Basic): {} мс\n",
+        std::chrono::duration_cast<std::chrono::milliseconds>(end_compute - start_compute).count());
+    std::cout << std::format("✅ Алгоритм сошёлся за {} итераций (Все точки зафиксированы)\n", iter);
+    // === КОНЕЦ ЗАМЕРА ВЫЧИСЛЕНИЙ ===
+
+    // Копируем финальные результаты
     cudaCheck(cudaMemcpy(h_cluster_ids.data(), d_cluster_ids, num_points * sizeof(int), cudaMemcpyDeviceToHost));
     cudaCheck(cudaMemcpy(h_centers.data(), d_centers, K * DIMS * sizeof(double), cudaMemcpyDeviceToHost));
 
@@ -201,7 +234,6 @@ std::vector<Point> kmeans(std::vector<Point> &points) {
     cudaFree(d_counts);
     cudaFree(d_changed);
 
-    // Возвращаем данные обратно в структуры C++
     for (int i = 0; i < num_points; ++i) {
         points[i].cluster_id = h_cluster_ids[i];
     }
@@ -212,8 +244,7 @@ std::vector<Point> kmeans(std::vector<Point> &points) {
         }
     }
 
-    // Вывод логов, как в CPU-коде
-    std::cout << "Итерация: " << iter << "\n";
+    // Вывод финальных центров
     for (const auto &p: centers) {
         std::cout << "Центроид " << p.cluster_id << " координаты: [";
         for (size_t i = 0; i < p.coords.size(); ++i) {
@@ -229,17 +260,16 @@ int main() {
     try {
         std::vector<Point> points = load_pointers("../Data");
 
-        // Структура вывода идентична CPU
-        std::cout << "Классификация начала\n";
+        std::cout << "Классификация начала (Standard CUDA)\n";
 
-        // Таймер теперь замеряет всё, включая выделение памяти на GPU
-        auto start = std::chrono::high_resolution_clock::now();
+        // Полный замер времени (включая память)
+        auto start_total = std::chrono::high_resolution_clock::now();
         std::vector<Point> centers = kmeans(points);
-        auto end = std::chrono::high_resolution_clock::now();
+        auto end_total = std::chrono::high_resolution_clock::now();
 
         std::cout << std::format(
-            "Классификация завершена за {} милисекунд\n",
-            std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count());
+            "Полное время выполнения (с учетом памяти): {} милисекунд\n",
+            std::chrono::duration_cast<std::chrono::milliseconds>(end_total - start_total).count());
 
         save_all_results(points, centers);
     } catch (const std::exception &e) {

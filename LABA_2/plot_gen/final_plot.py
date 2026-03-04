@@ -1,89 +1,129 @@
+import os
 from matplotlib import pyplot as plt
 import torch
 
-def get_pca_projections(points_cpu: torch.Tensor, centers_cpu: torch.Tensor,
-                        points_gpu: torch.Tensor, centers_gpu: torch.Tensor):
-    # Вычисляем оси PCA ТОЛЬКО по точкам CPU (координаты точек одинаковы для обеих версий)
-    # Находим среднее и центрируем данные вручную, чтобы использовать это же среднее для остальных
-    mean = torch.mean(points_cpu, dim=0)
-    centered_points = points_cpu - mean
+# Пути к файлам (проверьте, что они совпадают с тем, что в C++)
+PATHS = {
+    "CPU": "../Data/cpu",
+    "GPU (Basic)": "../Data/gpu",
+    "GPU (Optimized)": "../Data/gpu_opt",
+    "GPU (CUDA Stream)": "../Data/gpu_stream"
+}
 
-    # Вычисляем матрицу трансформации V (оси главных компонент)
-    # center=False, так как мы центрировали данные вручную
+def load_data(folder_path):
+    """Загружает точки и центры из указанной папки."""
+    res_path = os.path.join(folder_path, "kmeans_result.txt")
+    cen_path = os.path.join(folder_path, "kmeans_centers.txt")
+
+    if not os.path.exists(res_path) or not os.path.exists(cen_path):
+        print(f"Warning: Files not found in {folder_path}. Skipping.")
+        return None, None, None, None
+
+    def read_file(path):
+        data = []
+        labels = []
+        with open(path, "r") as f:
+            for line in f:
+                parts = line.split()
+                # Предполагаем, что последние данные - это ID кластера
+                data.append([float(x) for x in parts[:-1]])
+                labels.append(int(parts[-1]))
+        return torch.tensor(data, dtype=torch.float32), labels
+
+    points, p_labels = read_file(res_path)
+    centers, c_labels = read_file(cen_path)
+
+    return points, p_labels, centers, c_labels
+
+def get_pca_projection_basis(points):
+    """Вычисляет матрицу проекции PCA и среднее значение по эталонному набору данных."""
+    mean = torch.mean(points, dim=0)
+    centered_points = points - mean
+    # q=2 для проекции в 2D
     _, _, V = torch.pca_lowrank(centered_points, q=2, center=False)
+    return mean, V
 
-    # Проецируем все тензоры, вычитая то же самое среднее и умножая на матрицу V
-    p_cpu = torch.matmul(points_cpu - mean, V)
-    c_cpu = torch.matmul(centers_cpu - mean, V)
+def project_data(points, centers, mean, V):
+    """Проецирует данные, используя заранее вычисленный базис."""
+    p_proj = torch.matmul(points - mean, V)
+    c_proj = torch.matmul(centers - mean, V)
+    return p_proj, c_proj
 
-    p_gpu = torch.matmul(points_gpu - mean, V)
-    c_gpu = torch.matmul(centers_gpu - mean, V)
+def make_grid_plot(datasets, output_file="kmeans_comparison_full.png"):
+    """Рисует сетку графиков."""
 
-    return p_cpu, c_cpu, p_gpu, c_gpu
+    num_plots = len(datasets)
+    cols = 2
+    rows = (num_plots + 1) // cols
 
-def load_data(path):
-    data = []
-    labels = []
-    with open(path, "r") as f:
-        for line in f:
-            parts = line.split()
-            data.append([float(x) for x in parts[:9]])
-            labels.append(int(parts[9]))
-    return torch.tensor(data, dtype=torch.float32), labels
+    fig, axes = plt.subplots(rows, cols, figsize=(16, 8 * rows))
+    axes = axes.flatten() # Чтобы удобно обращаться по индексу
 
-def make_combined_plot(p_cpu, labels_cpu, c_cpu, c_labels_cpu,
-                       p_gpu, labels_gpu, c_gpu, c_labels_gpu,
-                       name_output_file: str):
+    for i, (name, data) in enumerate(datasets.items()):
+        ax = axes[i]
+        p_proj, p_labels, c_proj, c_labels = data
 
-    # Создаем ОДНУ фигуру с ДВУМЯ графиками (1 строка, 2 колонки)
-    fig, axes = plt.subplots(1, 2, figsize=(16, 8))
+        # Рисуем точки
+        ax.scatter(p_proj[:, 0].numpy(), p_proj[:, 1].numpy(),
+                   c=p_labels, cmap='tab10', s=5, alpha=0.3)
 
-    # --- Рисуем график для CPU (Левый) ---
-    axes[0].scatter(p_cpu[:, 0].numpy(), p_cpu[:, 1].numpy(),
-                    c=labels_cpu, cmap='tab10', s=5, alpha=0.5)
-    axes[0].scatter(c_cpu[:, 0].numpy(), c_cpu[:, 1].numpy(),
-                    c=c_labels_cpu, cmap='tab10', marker='*', s=200,
-                    edgecolors='black', linewidths=1.5, label="Centroids")
-    axes[0].set_title("K-Means Results (CPU)")
-    axes[0].legend()
+        # Рисуем центры
+        ax.scatter(c_proj[:, 0].numpy(), c_proj[:, 1].numpy(),
+                   c=c_labels, cmap='tab10', marker='*', s=300,
+                   edgecolors='black', linewidths=2, label="Centroids")
 
-    # --- Рисуем график для GPU (Правый) ---
-    axes[1].scatter(p_gpu[:, 0].numpy(), p_gpu[:, 1].numpy(),
-                    c=labels_gpu, cmap='tab10', s=5, alpha=0.5)
-    axes[1].scatter(c_gpu[:, 0].numpy(), c_gpu[:, 1].numpy(),
-                    c=c_labels_gpu, cmap='tab10', marker='*', s=200,
-                    edgecolors='black', linewidths=1.5, label="Centroids")
-    axes[1].set_title("K-Means Results (GPU)")
-    axes[1].legend()
+        ax.set_title(f"Result: {name}", fontsize=14)
+        ax.legend()
+        ax.grid(True, alpha=0.3)
 
-    # Общий заголовок
-    plt.suptitle("Comparison of K-Means Results: CPU vs GPU (PCA 2D Projection)", fontsize=16)
+    # Если графиков нечетное количество, скрываем лишние оси
+    for j in range(i + 1, len(axes)):
+        axes[j].axis('off')
 
-    # Автоматически выравниваем отступы, чтобы ничего не обрезалось
-    plt.tight_layout()
-    plt.savefig(name_output_file)
+    plt.suptitle("Comparison of K-Means Implementations (PCA 2D Projection)", fontsize=20)
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95]) # Оставляем место под заголовок
+    plt.savefig(output_file)
+    print(f"График сохранен как {output_file}")
     plt.close()
 
 def main():
-    # Загружаем точки и центры CPU
-    points_cpu, labels_cpu = load_data("../Data/cpu/kmeans_result.txt")
-    centers_cpu, c_labels_cpu = load_data("../Data/cpu/kmeans_centers.txt")
+    loaded_datasets = {}
 
-    # Загружаем точки и центры GPU
-    points_gpu, labels_gpu = load_data("../Data/gpu/kmeans_result.txt")
-    centers_gpu, c_labels_gpu = load_data("../Data/gpu/kmeans_centers.txt")
+    # 1. Сначала пытаемся загрузить CPU данные, чтобы использовать их как эталон для PCA
+    cpu_path = PATHS.get("CPU")
+    ref_points, ref_pl, ref_centers, ref_cl = load_data(cpu_path)
 
-    # Получаем проекции в ЕДИНОМ базисе координат, чтобы графики были сопоставимы
-    p_cpu, c_cpu, p_gpu, c_gpu = get_pca_projections(points_cpu, centers_cpu, points_gpu, centers_gpu)
+    if ref_points is None:
+        print("Error: CPU data not found! Cannot calculate reference PCA.")
+        # Если CPU нет, можно попробовать взять GPU Basic как эталон,
+        # но лучше, чтобы пользователь сначала запустил CPU версию.
+        return
 
-    # Строим один объединенный график
-    make_combined_plot(
-        p_cpu, labels_cpu, c_cpu, c_labels_cpu,
-        p_gpu, labels_gpu, c_gpu, c_labels_gpu,
-        name_output_file="kmeans_comparison.png"
-    )
+    # Вычисляем PCA базис на основе CPU данных
+    mean, V = get_pca_projection_basis(ref_points)
 
-    print("Объединенный график успешно сохранен как kmeans_comparison.png")
+    # Проецируем CPU данные
+    p_proj, c_proj = project_data(ref_points, ref_centers, mean, V)
+    loaded_datasets["CPU"] = (p_proj, ref_pl, c_proj, ref_cl)
+
+    # 2. Загружаем и проецируем остальные датасеты
+    for name, path in PATHS.items():
+        if name == "CPU": continue # Уже загрузили
+
+        points, p_labels, centers, c_labels = load_data(path)
+
+        if points is not None:
+            # Важно! Используем mean и V от CPU, чтобы графики не были повернуты относительно друг друга
+            p_proj, c_proj = project_data(points, centers, mean, V)
+            loaded_datasets[name] = (p_proj, p_labels, c_proj, c_labels)
+        else:
+            print(f"Skipping {name} (data not found)")
+
+    # 3. Рисуем
+    if len(loaded_datasets) > 0:
+        make_grid_plot(loaded_datasets)
+    else:
+        print("No datasets loaded.")
 
 if __name__ == "__main__":
     main()

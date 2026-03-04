@@ -80,7 +80,6 @@ def main():
         projected_groups.append(full_projected[start_idx:end_idx])
         start_idx = end_idx
 
-    # 5. Рисуем
     gen_plot(projected_groups, names)
 
 if __name__ == "__main__":

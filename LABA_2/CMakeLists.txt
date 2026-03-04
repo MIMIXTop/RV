@@ -7,13 +7,24 @@ set(CMAKE_CXX_STANDARD 23)
 find_package(TBB REQUIRED)
 
 add_executable(k_means_gpu k_means_gpu.cu)
+add_executable(k_means_gpu_opt k_means_gpu_opt.cu)
 add_executable(GetPointers getPointers.cpp)
 add_executable(k_means_cpu k_means_cpu.cpp)
+add_executable(k_means_gpu_stream k_means_gpu_stream.cu)
 
 target_link_libraries(k_means_cpu TBB::tbb)
 
 set_target_properties(k_means_gpu PROPERTIES
         CUDA_SEPARABLE_COMPILATION ON)
 
+set_target_properties(k_means_gpu_opt PROPERTIES
+        CUDA_SEPARABLE_COMPILATION ON)
+
+set_target_properties(k_means_gpu_stream PROPERTIES
+        CUDA_SEPARABLE_COMPILATION ON)
+
+
 set_target_properties(k_means_cpu PROPERTIES CXX_STANDARD 23)
 set_target_properties(k_means_gpu PROPERTIES CUDA_STANDARD 23)
+set_target_properties(k_means_gpu_opt PROPERTIES CUDA_STANDARD 23)
+set_target_properties(k_means_gpu_stream PROPERTIES CUDA_STANDARD 23)

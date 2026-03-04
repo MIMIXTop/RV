@@ -114,15 +114,22 @@ std::vector<Point> kmeans(std::vector<Point>& points) {
             }
         }
 
+        double max_shift = 0.0;
         for (int i = 0; i < K; ++i) {
             if (counts[i] > 0) {
                 for (size_t j = 0; j < 9; ++j) {
                     double new_val = new_sums[i][j] / counts[i];
-                    if (std::abs(centers[i].coords[j] - new_val) < 1e-20)
-                        changed = true;
+                    double shift = std::abs(centers[i].coords[j] - new_val);
+                    if (shift > max_shift) max_shift = shift;
                     centers[i].coords[j] = new_val;
                 }
             }
+        }
+
+        std::println("Итерация {}: max_shift = {:.6f}", iter, max_shift);
+        if (max_shift < 1e-4) {
+            std::println("✅ Алгоритм сошёлся");
+            changed = true;
         }
         ++iter;
     }
